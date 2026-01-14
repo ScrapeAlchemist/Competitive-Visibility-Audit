@@ -1,5 +1,7 @@
 # Competitive Visibility Audit
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ScrapeAlchemist/Competitive-Visibility-Audit/blob/main/Competitive_Visibility_Audit.ipynb)
+
 A Jupyter notebook that builds a competitive intelligence pipeline using Bright Data's Web Execution Layer APIs and OpenAI GPT for analysis.
 
 ## What It Does
@@ -25,12 +27,18 @@ This notebook performs a comprehensive competitive audit across 5 sections:
 
 ### Option 1: Google Colab (Recommended)
 
-1. Upload the notebook to Google Colab
-2. Add your API keys to Colab Secrets (click the key icon in the left sidebar):
-   - `BRIGHTDATA_API_TOKEN` - Your Bright Data API token
-   - `BRIGHTDATA_ZONE_SERP` - Your SERP API zone name (e.g., `serp_api1`)
-   - `BRIGHTDATA_ZONE_UNLOCKER` - Your Web Unlocker zone name (e.g., `unlocker`)
-   - `OPENAI_API_KEY` - Your OpenAI API key
+1. Click the "Open in Colab" badge above (or [this link](https://colab.research.google.com/github/ScrapeAlchemist/Competitive-Visibility-Audit/blob/main/Competitive_Visibility_Audit.ipynb))
+2. Add your API keys to Colab Secrets:
+   - Click the **🔑 key icon** in the left sidebar
+   - Add each secret and toggle **"Notebook access"** on:
+
+   | Secret Name | Description |
+   |-------------|-------------|
+   | `BRIGHTDATA_API_TOKEN` | Your Bright Data API token |
+   | `BRIGHTDATA_ZONE_SERP` | SERP API zone name (e.g., `serp_api1`) |
+   | `BRIGHTDATA_ZONE_UNLOCKER` | Web Unlocker zone name (e.g., `unlocker`) |
+   | `OPENAI_API_KEY` | Your OpenAI API key |
+
 3. Run the notebook cells in order
 
 ### Option 2: Local Jupyter
