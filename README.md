@@ -21,11 +21,8 @@ This notebook performs a comprehensive competitive audit across 5 sections:
   - Web Unlocker zone configured
   - API token
 - **OpenAI API Key** for GPT-powered analysis
-- **Google Colab** (recommended) for running the notebook
 
 ## Setup
-
-### Option 1: Google Colab (Recommended)
 
 1. Click the "Open in Colab" badge above (or [this link](https://colab.research.google.com/github/ScrapeAlchemist/Competitive-Visibility-Audit/blob/main/Competitive_Visibility_Audit.ipynb))
 2. Add your API keys to Colab Secrets:
@@ -40,23 +37,6 @@ This notebook performs a comprehensive competitive audit across 5 sections:
    | `OPENAI_API_KEY` | Your OpenAI API key |
 
 3. Run the notebook cells in order
-
-### Option 2: Local Jupyter
-
-1. Clone the repository
-2. Copy `.env.example` to `.env` and fill in your API keys
-3. Install dependencies: `pip install requests openai`
-4. Run the notebook
-
-## Configuration
-
-In the first code cell, enter your company details:
-
-```python
-MY_BRAND = "YourCompany"      # Your brand name
-MY_DOMAIN = "yourcompany.com" # Your domain
-COUNTRY = "us"                # Target country code
-```
 
 ## Bright Data APIs Used
 
