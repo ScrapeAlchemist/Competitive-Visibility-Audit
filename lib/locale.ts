@@ -33,12 +33,3 @@ export function toCountryCode(location: string): string {
   if (/^[a-z]{2}$/.test(l)) return l;
   return 'us';
 }
-
-/**
- * Pair a country code with a sensible Google interface/result language.
- * Defaults to English so audit output stays readable for an English-speaking
- * SEO team even when the target market is a non-English country.
- */
-export function defaultLanguageForCountry(_country: string): string {
-  return 'en';
-}

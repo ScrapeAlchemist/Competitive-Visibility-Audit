@@ -32,14 +32,13 @@ export async function runSerpStage(
   auditId: string,
   keywords: string[],
   brand: DiscoveredBrand,
-  country: string,
-  language: string
+  country: string
 ): Promise<SerpStageOutput> {
   startStage(auditId, STAGE_ID);
   log(
     auditId,
     'INFO',
-    `SERP localization: gl=${country} hl=${language} (top ${SERP_RESULTS_PER_KEYWORD} per keyword)`,
+    `SERP localization: gl=${country} (top ${SERP_RESULTS_PER_KEYWORD} per keyword, results in English)`,
     { stage: STAGE_ID }
   );
 
@@ -48,14 +47,13 @@ export async function runSerpStage(
     const sub = addSubTask(auditId, STAGE_ID, `SERP: "${keyword}"`, 'SERP');
     const t0 = Date.now();
     try {
-      log(auditId, 'BD_CALL', `SERP: "${keyword}" gl=${country} hl=${language}`, {
+      log(auditId, 'BD_CALL', `SERP: "${keyword}" gl=${country}`, {
         bdProduct: 'SERP',
         stage: STAGE_ID,
       });
       const items = await searchSerp(keyword, {
         num: SERP_RESULTS_PER_KEYWORD,
         country,
-        language,
       });
       log(auditId, 'BD_DONE', `SERP "${keyword}" returned ${items.length} results`, {
         bdProduct: 'SERP',

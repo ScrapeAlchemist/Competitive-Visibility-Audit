@@ -30,7 +30,7 @@ import { runHomepageStage } from './stages/homepage';
 import { runAiMentionsStage } from './stages/ai-mentions';
 import { runDeepScrapeStage } from './stages/deep-scrape';
 import { runSynthesisStage } from './stages/synthesis';
-import { toCountryCode, defaultLanguageForCountry } from '../locale';
+import { toCountryCode } from '../locale';
 
 interface PipelineContext {
   brand?: DiscoveredBrand;
@@ -98,8 +98,7 @@ export function startMainPipeline(auditId: string, confirmedBrand: DiscoveredBra
 
       // Stage 2: SERP + competitor aggregation
       const country = toCountryCode(audit.input.location);
-      const language = defaultLanguageForCountry(country);
-      const serpOut = await runSerpStage(auditId, ctx.keywords, confirmedBrand, country, language);
+      const serpOut = await runSerpStage(auditId, ctx.keywords, confirmedBrand, country);
       ctx.serp = serpOut.serp;
       ctx.competitors = serpOut.competitors;
       if (getAudit(auditId)?.stages[2].status === 'partial') anyPartial = true;
