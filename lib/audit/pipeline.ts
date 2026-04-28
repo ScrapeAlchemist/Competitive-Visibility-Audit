@@ -107,8 +107,9 @@ export function startMainPipeline(auditId: string, confirmedBrand: DiscoveredBra
       if (getAudit(auditId)?.stages[3].status === 'partial') anyPartial = true;
 
       // Stages 4 + 5 in parallel - they don't depend on each other
+      const aiCountry = (countryCode || 'us').toUpperCase();
       const [aiMentions, deepInsights] = await Promise.all([
-        runAiMentionsStage(auditId, confirmedBrand, ctx.competitors, ctx.brandProfiles),
+        runAiMentionsStage(auditId, confirmedBrand, ctx.competitors, ctx.brandProfiles, aiCountry),
         runDeepScrapeStage(auditId, confirmedBrand, ctx.competitors),
       ]);
       ctx.aiMentions = aiMentions;

@@ -140,7 +140,12 @@ export async function unlockUrl(url: string, opts: { timeoutMs?: number } = {}):
     format: 'raw',
     timeoutMs: opts.timeoutMs,
   });
-  return typeof html === 'string' ? html : JSON.stringify(html);
+  const body = typeof html === 'string' ? html : JSON.stringify(html);
+  // BD sometimes returns 200 with empty body on policy blocks; treat as failure
+  if (!body || body.length < 200) {
+    throw new BdError(`Unlocker returned empty/short body for ${url} (${body?.length ?? 0} chars) - likely a policy block or anti-bot redirect`);
+  }
+  return body;
 }
 
 export function htmlToCleanText(html: string, maxLen = 8000): string {
@@ -161,12 +166,55 @@ export function htmlToCleanText(html: string, maxLen = 8000): string {
 }
 
 // =====================================================
-// AI engine mentions (best-effort - uses Web Unlocker on engines that
-// allow public search URLs; falls back to a labeled stub for engines that
-// require auth/dataset configuration)
+// AI engine mentions via Bright Data AI Search dataset APIs
+// 3-phase flow: trigger -> poll progress -> download snapshot.
+// Each (engine, query) pair fires N redundant trigger requests; we
+// take the snapshot that becomes ready first. Mirrors the original
+// notebook's REDUNDANT_REQUESTS=3 pattern for speed.
 // =====================================================
 
 export type AiEngineId = 'chatgpt' | 'perplexity' | 'grok' | 'gemini';
+
+interface AiEngineConfig {
+  datasetId: string;
+  name: string;
+  url: string;
+  payloadStyle: 'array' | 'inputWrapper';
+  countrySupportsIL: boolean;
+}
+
+export const AI_ENGINES: Record<AiEngineId, AiEngineConfig> = {
+  chatgpt: {
+    datasetId: 'gd_m7aof0k82r803d5bjm',
+    name: 'ChatGPT',
+    url: 'https://chatgpt.com/',
+    payloadStyle: 'array',
+    countrySupportsIL: true,
+  },
+  perplexity: {
+    datasetId: 'gd_m7dhdot1vw9a7gc1n',
+    name: 'Perplexity',
+    url: 'https://www.perplexity.ai',
+    payloadStyle: 'array',
+    countrySupportsIL: true,
+  },
+  grok: {
+    datasetId: 'gd_m8ve0u141icu75ae74',
+    name: 'Grok',
+    url: 'https://grok.com/',
+    payloadStyle: 'array',
+    countrySupportsIL: true,
+  },
+  gemini: {
+    datasetId: 'gd_mbz66arm2mf9cu856y',
+    name: 'Gemini',
+    url: 'https://gemini.google.com/',
+    payloadStyle: 'inputWrapper',
+    countrySupportsIL: false,
+  },
+};
+
+export const REDUNDANT_REQUESTS = 3;
 
 export interface AiEngineQueryResult {
   engine: AiEngineId;
@@ -174,67 +222,183 @@ export interface AiEngineQueryResult {
   query: string;
   rawText: string;
   errorMessage?: string;
+  snapshotId?: string;
+  durationMs?: number;
+}
+
+const BD_DATASETS_BASE = 'https://api.brightdata.com/datasets/v3';
+
+async function triggerAiSnapshot(
+  engine: AiEngineId,
+  query: string,
+  country: string
+): Promise<string | null> {
+  if (!TOKEN) throw new BdError('BRIGHTDATA_API_TOKEN not set');
+  const cfg = AI_ENGINES[engine];
+  // Gemini doesn't support Israel; strip the country in that case
+  const queryCountry = !cfg.countrySupportsIL && country.toUpperCase() === 'IL' ? '' : country.toUpperCase();
+  const item = { url: cfg.url, prompt: query, country: queryCountry };
+  const payload = cfg.payloadStyle === 'inputWrapper' ? { input: [item] } : [item];
+
+  try {
+    const res = await fetchWithTimeout(
+      `${BD_DATASETS_BASE}/trigger?dataset_id=${cfg.datasetId}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      },
+      30_000
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { snapshot_id?: string };
+    return data.snapshot_id || null;
+  } catch {
+    return null;
+  }
+}
+
+type SnapshotStatus = 'running' | 'ready' | 'failed' | 'unknown';
+
+async function checkSnapshotStatus(snapshotId: string): Promise<SnapshotStatus> {
+  if (!TOKEN) return 'unknown';
+  try {
+    const res = await fetchWithTimeout(
+      `${BD_DATASETS_BASE}/progress/${snapshotId}`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+      10_000
+    );
+    if (!res.ok) return 'unknown';
+    const data = (await res.json()) as { status?: string };
+    if (data.status === 'ready') return 'ready';
+    if (data.status === 'failed') return 'failed';
+    return 'running';
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function downloadSnapshot(snapshotId: string): Promise<string | null> {
+  if (!TOKEN) return null;
+  try {
+    const res = await fetchWithTimeout(
+      `${BD_DATASETS_BASE}/snapshot/${snapshotId}?format=json`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+      30_000
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const item = data[0];
+    const text =
+      (item['answer_text_markdown'] as string | undefined) ||
+      (item['answer_text'] as string | undefined) ||
+      (item['answer'] as string | undefined) ||
+      JSON.stringify(item).slice(0, 12_000);
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+interface QueryOpts {
+  redundancy?: number;
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+  onTriggered?: (snapshotId: string, attemptIdx: number) => void;
+  onFirstReady?: (snapshotId: string, elapsedMs: number) => void;
 }
 
 /**
- * Perplexity has a public search URL that Web Unlocker can usually reach.
- * Returns the cleaned text response.
+ * Race N redundant snapshot triggers, take the first ready, download it.
  */
-async function queryPerplexity(query: string): Promise<AiEngineQueryResult> {
-  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(query)}`;
-  try {
-    const html = await unlockUrl(url, { timeoutMs: 45_000 });
-    const text = htmlToCleanText(html, 12_000);
-    return { engine: 'perplexity', status: 'success', query, rawText: text };
-  } catch (err) {
+export async function queryAiEngineRaced(
+  engine: AiEngineId,
+  query: string,
+  country: string,
+  opts: QueryOpts = {}
+): Promise<AiEngineQueryResult> {
+  const redundancy = opts.redundancy ?? REDUNDANT_REQUESTS;
+  const pollIntervalMs = opts.pollIntervalMs ?? 4000;
+  const maxWaitMs = opts.maxWaitMs ?? 180_000;
+  const startedAt = Date.now();
+
+  // Phase 1: trigger N snapshots in parallel
+  const triggerResults = await Promise.all(
+    Array.from({ length: redundancy }, () => triggerAiSnapshot(engine, query, country))
+  );
+  const snapshotIds = triggerResults.filter((id): id is string => !!id);
+  snapshotIds.forEach((id, idx) => opts.onTriggered?.(id, idx));
+  if (snapshotIds.length === 0) {
     return {
-      engine: 'perplexity',
-      status: 'failed',
+      engine,
       query,
+      status: 'failed',
       rawText: '',
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: 'All trigger requests failed',
+      durationMs: Date.now() - startedAt,
     };
   }
-}
 
-/**
- * For engines that require auth (ChatGPT, Grok, Gemini), the proper integration
- * is via Bright Data's Web Scraper API datasets. Without dataset IDs configured,
- * we mark the result as failed but with a clear hint - this keeps the parallel
- * Stage 4 visualization honest while not blocking the demo.
- */
-async function queryAuthedEngine(engine: AiEngineId, query: string): Promise<AiEngineQueryResult> {
-  // Try a public-search-style URL that Web Unlocker may handle.
-  // ChatGPT does not expose public answers; Gemini search routes to Google AI Overviews.
-  if (engine === 'gemini') {
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&udm=50`;
-    try {
-      const html = await unlockUrl(url, { timeoutMs: 45_000 });
-      const text = htmlToCleanText(html, 12_000);
-      return { engine, status: 'success', query, rawText: text };
-    } catch (err) {
+  // Phase 2: poll all snapshots in parallel until one becomes ready
+  let firstReady: string | null = null;
+  while (Date.now() - startedAt < maxWaitMs && !firstReady) {
+    const statuses = await Promise.all(snapshotIds.map((id) => checkSnapshotStatus(id)));
+    const idx = statuses.findIndex((s) => s === 'ready');
+    if (idx >= 0) {
+      firstReady = snapshotIds[idx];
+      opts.onFirstReady?.(firstReady, Date.now() - startedAt);
+      break;
+    }
+    if (statuses.every((s) => s === 'failed' || s === 'unknown')) {
       return {
         engine,
-        status: 'failed',
         query,
+        status: 'failed',
         rawText: '',
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: 'All snapshots failed',
+        durationMs: Date.now() - startedAt,
       };
     }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
-  // ChatGPT / Grok require BD Scraper API datasets
+
+  if (!firstReady) {
+    return {
+      engine,
+      query,
+      status: 'failed',
+      rawText: '',
+      errorMessage: `Timed out after ${maxWaitMs}ms (no snapshot ready)`,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  // Phase 3: download the first-ready snapshot
+  const text = await downloadSnapshot(firstReady);
+  if (!text) {
+    return {
+      engine,
+      query,
+      status: 'failed',
+      rawText: '',
+      errorMessage: 'Snapshot ready but download returned no text',
+      snapshotId: firstReady,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
   return {
     engine,
-    status: 'failed',
     query,
-    rawText: '',
-    errorMessage: `${engine} requires BD Scraper API dataset; not configured`,
+    status: 'success',
+    rawText: text,
+    snapshotId: firstReady,
+    durationMs: Date.now() - startedAt,
   };
-}
-
-export async function queryAiEngine(engine: AiEngineId, query: string): Promise<AiEngineQueryResult> {
-  if (engine === 'perplexity') return queryPerplexity(query);
-  return queryAuthedEngine(engine, query);
 }
 
 // =====================================================

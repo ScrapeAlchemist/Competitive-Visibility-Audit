@@ -6,7 +6,7 @@
 // visualization stays honest.
 // =====================================================
 
-import { queryAiEngine, AiEngineId } from '../../brightdata';
+import { queryAiEngineRaced, AiEngineId, AI_ENGINES, REDUNDANT_REQUESTS } from '../../brightdata';
 import { runClaudeJson } from '../../claude-cli';
 import { AiEngine, AiMention, BrandProfile, CompetitorBrand, DiscoveredBrand } from '../../types';
 import {
@@ -33,7 +33,8 @@ export async function runAiMentionsStage(
   auditId: string,
   brand: DiscoveredBrand,
   competitors: CompetitorBrand[],
-  profiles: BrandProfile[]
+  profiles: BrandProfile[],
+  country: string
 ): Promise<AiMention[]> {
   startStage(auditId, STAGE_ID);
 
@@ -42,27 +43,52 @@ export async function runAiMentionsStage(
   const knownBrands = [brand.domain, ...competitors.map((c) => c.domain)];
 
   const tasks = ENGINES.map(async (engine): Promise<AiMention> => {
-    const querySub = addSubTask(auditId, STAGE_ID, `Query ${engine}`, 'SCRAPER');
+    const querySub = addSubTask(
+      auditId,
+      STAGE_ID,
+      `${AI_ENGINES[engine].name} (race ${REDUNDANT_REQUESTS}x)`,
+      'SCRAPER'
+    );
     const t0 = Date.now();
     let raw = '';
     let queryStatus: 'success' | 'failed' = 'failed';
     let queryError: string | undefined;
 
     try {
-      log(auditId, 'BD_CALL', `${engine}: "${query}"`, { bdProduct: 'SCRAPER', stage: STAGE_ID });
-      const result = await queryAiEngine(engine, query);
+      log(auditId, 'BD_CALL', `${AI_ENGINES[engine].name}: triggering ${REDUNDANT_REQUESTS} snapshots for "${query.slice(0, 60)}..."`, {
+        bdProduct: 'SCRAPER',
+        stage: STAGE_ID,
+      });
+      const result = await queryAiEngineRaced(engine, query, country, {
+        onTriggered: (snapshotId, attemptIdx) => {
+          log(
+            auditId,
+            'BD_CALL',
+            `${AI_ENGINES[engine].name}: snapshot ${attemptIdx + 1} = ${snapshotId.slice(0, 12)}`,
+            { bdProduct: 'SCRAPER', stage: STAGE_ID }
+          );
+        },
+        onFirstReady: (snapshotId, elapsedMs) => {
+          log(
+            auditId,
+            'BD_DONE',
+            `${AI_ENGINES[engine].name}: first snapshot ready in ${(elapsedMs / 1000).toFixed(1)}s (${snapshotId.slice(0, 12)})`,
+            { bdProduct: 'SCRAPER', stage: STAGE_ID, durationMs: elapsedMs }
+          );
+        },
+      });
       raw = result.rawText;
       queryStatus = result.status;
       queryError = result.errorMessage;
       if (result.status === 'success') {
-        log(auditId, 'BD_DONE', `${engine}: ${raw.length} chars`, {
+        log(auditId, 'BD_DONE', `${AI_ENGINES[engine].name}: downloaded ${raw.length} chars`, {
           bdProduct: 'SCRAPER',
           stage: STAGE_ID,
           durationMs: Date.now() - t0,
         });
         completeSubTask(auditId, STAGE_ID, querySub.id);
       } else {
-        log(auditId, 'BD_FAIL', `${engine}: ${queryError || 'unknown'}`, {
+        log(auditId, 'BD_FAIL', `${AI_ENGINES[engine].name}: ${queryError || 'unknown'}`, {
           bdProduct: 'SCRAPER',
           stage: STAGE_ID,
         });
@@ -70,7 +96,10 @@ export async function runAiMentionsStage(
       }
     } catch (err) {
       queryError = err instanceof Error ? err.message : String(err);
-      log(auditId, 'BD_FAIL', `${engine}: ${queryError}`, { bdProduct: 'SCRAPER', stage: STAGE_ID });
+      log(auditId, 'BD_FAIL', `${AI_ENGINES[engine].name}: ${queryError}`, {
+        bdProduct: 'SCRAPER',
+        stage: STAGE_ID,
+      });
       failSubTask(auditId, STAGE_ID, querySub.id, queryError);
     }
 

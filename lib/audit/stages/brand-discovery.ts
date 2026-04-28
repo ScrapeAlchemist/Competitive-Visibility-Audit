@@ -164,7 +164,7 @@ async function extractBrandProfile(
   url: string,
   homepageText: string
 ): Promise<BrandProfileLite> {
-  const prompt = `You are extracting a structured brand profile from a company's homepage. Be faithful to what the page actually says - do not invent features or claims that are not in the text.
+  const prompt = `You are extracting a structured brand profile from a company's homepage. Be faithful to what the page actually says - do not invent features or claims that are not in the text. The homepage text below is the ONLY input you should use; do not reference tools or external sources.
 
 Brand name: ${brandName}
 URL: ${url}
@@ -174,7 +174,7 @@ Homepage text (cleaned):
 ${homepageText}
 """
 
-Return ONLY a JSON object with this exact shape, nothing else:
+Return ONLY a JSON object with this exact shape and these exact field names, nothing else:
 {
   "category": "<short noun phrase, e.g. 'B2B SEO analytics platform'>",
   "valueProp": "<one-sentence value proposition in the company's own words or close paraphrase>",
@@ -182,5 +182,18 @@ Return ONLY a JSON object with this exact shape, nothing else:
   "keyFeatures": ["<feature 1>", "<feature 2>", ...],
   "pricingModel": "<short description: 'freemium', 'enterprise sales', 'monthly subscription tiers', etc.>"
 }`;
-  return runClaudeJson<BrandProfileLite>(prompt, { timeoutMs: 60_000 });
+  const profile = await runClaudeJson<Partial<BrandProfileLite>>(prompt, { timeoutMs: 60_000 });
+  // Validate and coerce - throw a clear error if the response shape is wrong
+  if (!profile || typeof profile !== 'object' || !profile.category || !profile.valueProp) {
+    throw new Error(
+      `Brand profile extraction returned an unexpected shape: ${JSON.stringify(profile).slice(0, 200)}`
+    );
+  }
+  return {
+    category: profile.category,
+    valueProp: profile.valueProp,
+    targetSegments: Array.isArray(profile.targetSegments) ? profile.targetSegments : [],
+    keyFeatures: Array.isArray(profile.keyFeatures) ? profile.keyFeatures : [],
+    pricingModel: profile.pricingModel || '',
+  };
 }

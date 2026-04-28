@@ -119,7 +119,7 @@ export async function runClaude(prompt: string, opts: RunOptions = {}): Promise<
 }
 
 const JSON_SYSTEM_PROMPT =
-  'You are a structured-data extraction service. Your only job is to read the user message and output a single JSON value (object or array) that matches the schema described in that message. Output rules: (1) Output ONLY the JSON value. No prose, no explanation, no apology, no preamble, no follow-up. (2) The very first character of your response MUST be { or [. (3) The very last character MUST be } or ]. (4) No markdown code fences. (5) Do not invent or fetch additional information; rely only on what the user message provides.';
+  'You are a structured-data extraction service. Your only job is to read the user message and output a single JSON value (object or array) that matches the schema described in that message. Output rules: (1) Output ONLY the JSON value. No prose, no explanation, no apology, no preamble, no follow-up. (2) The very first character of your response MUST be { or [. (3) The very last character MUST be } or ]. (4) No markdown code fences. (5) Do not invent or fetch additional information; rely only on what the user message provides. (6) Do NOT reference tools, do NOT output tool-call JSON like {"tool": "..."}, do NOT suggest fetching or scraping anything. Treat the user message text as the only source of truth and extract from it directly.';
 
 /**
  * Convenience: run a prompt and parse the response as JSON.
