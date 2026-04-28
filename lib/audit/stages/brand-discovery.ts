@@ -6,6 +6,7 @@
 
 import { searchSerp, unlockUrl, htmlToCleanText } from '../../brightdata';
 import { runClaudeJson } from '../../claude-cli';
+import { toCountryCode, defaultLanguageForCountry } from '../../locale';
 import { BrandProfileLite, DiscoveredBrand } from '../../types';
 import {
   addSubTask,
@@ -28,13 +29,18 @@ export async function runBrandDiscovery(
 ): Promise<DiscoveredBrand> {
   startStage(auditId, STAGE_ID);
 
-  // Step 1: SERP search for the brand
+  // Step 1: SERP search for the brand (localized to the audit's country/language)
+  const country = toCountryCode(location);
+  const language = defaultLanguageForCountry(country);
   const serpSub = addSubTask(auditId, STAGE_ID, `SERP: "${brandName}" in ${location}`, 'SERP');
   let candidateUrl: string;
   try {
     const t0 = Date.now();
-    log(auditId, 'BD_CALL', `SERP: "${brandName} ${location}"`, { bdProduct: 'SERP', stage: STAGE_ID });
-    const results = await searchSerp(`${brandName} ${location}`, { num: 10 });
+    log(auditId, 'BD_CALL', `SERP: "${brandName} ${location}" (gl=${country}, hl=${language})`, {
+      bdProduct: 'SERP',
+      stage: STAGE_ID,
+    });
+    const results = await searchSerp(`${brandName} ${location}`, { num: 10, country, language });
     log(auditId, 'BD_DONE', `SERP returned ${results.length} results`, {
       bdProduct: 'SERP',
       stage: STAGE_ID,

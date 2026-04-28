@@ -32,19 +32,30 @@ export async function runSerpStage(
   auditId: string,
   keywords: string[],
   brand: DiscoveredBrand,
-  countryCode?: string
+  country: string,
+  language: string
 ): Promise<SerpStageOutput> {
   startStage(auditId, STAGE_ID);
+  log(
+    auditId,
+    'INFO',
+    `SERP localization: gl=${country} hl=${language} (top ${SERP_RESULTS_PER_KEYWORD} per keyword)`,
+    { stage: STAGE_ID }
+  );
 
   type Out = { keyword: string; items: import('../../types').SerpItem[]; ok: boolean };
   const tasks: Promise<Out>[] = keywords.map(async (keyword): Promise<Out> => {
     const sub = addSubTask(auditId, STAGE_ID, `SERP: "${keyword}"`, 'SERP');
     const t0 = Date.now();
     try {
-      log(auditId, 'BD_CALL', `SERP: "${keyword}"`, { bdProduct: 'SERP', stage: STAGE_ID });
+      log(auditId, 'BD_CALL', `SERP: "${keyword}" gl=${country} hl=${language}`, {
+        bdProduct: 'SERP',
+        stage: STAGE_ID,
+      });
       const items = await searchSerp(keyword, {
         num: SERP_RESULTS_PER_KEYWORD,
-        country: countryCode,
+        country,
+        language,
       });
       log(auditId, 'BD_DONE', `SERP "${keyword}" returned ${items.length} results`, {
         bdProduct: 'SERP',

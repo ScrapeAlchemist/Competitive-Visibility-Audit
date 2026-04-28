@@ -101,10 +101,42 @@ export interface SerpResult {
   rank: number;
 }
 
-export async function searchSerp(query: string, opts: { num?: number; country?: string } = {}): Promise<SerpResult[]> {
+export interface SerpOpts {
+  num?: number;
+  /** Two-letter ISO country code, e.g. 'us', 'uk', 'il'. Defaults to 'us'. */
+  country?: string;
+  /** Two-letter ISO language code for the Google UI / result language, e.g. 'en', 'de'. Defaults to 'en'. */
+  language?: string;
+  /** Optional UULE string for city-level location targeting. Pass a precomputed UULE token. */
+  uule?: string;
+  /** Set true to force Google AI Overviews onto the SERP (BD parameter). */
+  aiOverview?: boolean;
+}
+
+/**
+ * Bright Data SERP API search.
+ * Always sets gl (country) and hl (language) for deterministic localization.
+ * Per BD docs, the localization trio is gl + hl + uule:
+ *   - gl: country (ISO code)
+ *   - hl: interface/result language (ISO code)
+ *   - uule: precise location targeting (optional, base64 location string)
+ * Without hl, Google may serve results in the country's local language even
+ * when the audit caller wants English (e.g. gl=il without hl=en serves Hebrew).
+ */
+export async function searchSerp(query: string, opts: SerpOpts = {}): Promise<SerpResult[]> {
   const num = opts.num ?? 20;
-  const params = new URLSearchParams({ q: query, num: String(num) });
-  if (opts.country) params.set('gl', opts.country);
+  const country = (opts.country || 'us').toLowerCase();
+  const language = (opts.language || 'en').toLowerCase();
+
+  const params = new URLSearchParams({
+    q: query,
+    num: String(num),
+    gl: country,
+    hl: language,
+  });
+  if (opts.uule) params.set('uule', opts.uule);
+  if (opts.aiOverview) params.set('brd_ai_overview', '2');
+
   const url = `https://www.google.com/search?${params.toString()}`;
 
   const data = await bdRequest<SerpRawResponse>(SERP_ZONE, url, {

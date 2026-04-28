@@ -30,6 +30,7 @@ import { runHomepageStage } from './stages/homepage';
 import { runAiMentionsStage } from './stages/ai-mentions';
 import { runDeepScrapeStage } from './stages/deep-scrape';
 import { runSynthesisStage } from './stages/synthesis';
+import { toCountryCode, defaultLanguageForCountry } from '../locale';
 
 interface PipelineContext {
   brand?: DiscoveredBrand;
@@ -96,8 +97,9 @@ export function startMainPipeline(auditId: string, confirmedBrand: DiscoveredBra
       ctx.keywords = await runKeywordGeneration(auditId, confirmedBrand, audit.input.location);
 
       // Stage 2: SERP + competitor aggregation
-      const countryCode = guessCountryCode(audit.input.location);
-      const serpOut = await runSerpStage(auditId, ctx.keywords, confirmedBrand, countryCode);
+      const country = toCountryCode(audit.input.location);
+      const language = defaultLanguageForCountry(country);
+      const serpOut = await runSerpStage(auditId, ctx.keywords, confirmedBrand, country, language);
       ctx.serp = serpOut.serp;
       ctx.competitors = serpOut.competitors;
       if (getAudit(auditId)?.stages[2].status === 'partial') anyPartial = true;
@@ -107,7 +109,7 @@ export function startMainPipeline(auditId: string, confirmedBrand: DiscoveredBra
       if (getAudit(auditId)?.stages[3].status === 'partial') anyPartial = true;
 
       // Stages 4 + 5 in parallel - they don't depend on each other
-      const aiCountry = (countryCode || 'us').toUpperCase();
+      const aiCountry = country.toUpperCase();
       const [aiMentions, deepInsights] = await Promise.all([
         runAiMentionsStage(auditId, confirmedBrand, ctx.competitors, ctx.brandProfiles, aiCountry),
         runDeepScrapeStage(auditId, confirmedBrand, ctx.competitors),
@@ -156,34 +158,3 @@ export function startMainPipeline(auditId: string, confirmedBrand: DiscoveredBra
   })();
 }
 
-/**
- * Map common location strings to ISO country codes for SERP localization.
- * Returns undefined when we can't be confident; SERP defaults to a generic locale.
- */
-function guessCountryCode(location: string): string | undefined {
-  const l = location.trim().toLowerCase();
-  const map: Record<string, string> = {
-    israel: 'il',
-    'united states': 'us',
-    usa: 'us',
-    us: 'us',
-    'united kingdom': 'uk',
-    uk: 'uk',
-    england: 'uk',
-    britain: 'uk',
-    germany: 'de',
-    france: 'fr',
-    spain: 'es',
-    italy: 'it',
-    netherlands: 'nl',
-    canada: 'ca',
-    australia: 'au',
-    india: 'in',
-    japan: 'jp',
-    brazil: 'br',
-  };
-  if (map[l]) return map[l];
-  // Two-letter fallback if user passed an ISO code already
-  if (/^[a-z]{2}$/.test(l)) return l;
-  return undefined;
-}
