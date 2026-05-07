@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { warmup as bdWarmup } from '@/lib/brightdata';
-import { warmup as claudeWarmup } from '@/lib/claude-cli';
+import { warmup as claudeWarmup } from '@/lib/claude';
 import { isEmailConfigured } from '@/lib/email';
 
 export async function GET() {

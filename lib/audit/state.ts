@@ -18,6 +18,15 @@ import {
   AuditReport,
   DiscoveredBrand,
 } from '../types';
+import { appendLogToDisk, saveAuditSnapshot } from './persistence';
+
+// Status transitions where it's worth saving a snapshot to disk
+const SAVEPOINT_STATUSES = new Set<AuditStatus>([
+  'awaiting_confirmation',
+  'partial',
+  'complete',
+  'failed',
+]);
 
 interface AuditEnvelope {
   audit: Audit;
@@ -78,6 +87,7 @@ export function setAuditStatus(id: string, status: AuditStatus, error?: string):
     env.audit.endedAt = Date.now();
   }
   emit(id, { kind: 'audit', audit: env.audit });
+  if (SAVEPOINT_STATUSES.has(status)) saveAuditSnapshot(id, env.audit);
 }
 
 export function setBrand(id: string, brand: DiscoveredBrand): void {
@@ -92,6 +102,7 @@ export function setReport(id: string, report: AuditReport): void {
   if (!env) return;
   env.audit.report = report;
   emit(id, { kind: 'audit', audit: env.audit });
+  saveAuditSnapshot(id, env.audit);
 }
 
 export function getStage(id: string, stageId: number): StageProgress | undefined {
@@ -199,6 +210,7 @@ export function log(
   };
   env.logs.push(entry);
   emit(id, { kind: 'log', entry });
+  appendLogToDisk(id, entry);
 }
 
 export function subscribe(id: string, callback: (evt: AuditEvent) => void): () => void {

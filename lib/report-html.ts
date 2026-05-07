@@ -52,7 +52,8 @@ export function renderReportEmailHtml(report: AuditReport): string {
 
     <div style="background:linear-gradient(135deg,rgba(6,182,212,0.08),rgba(139,92,246,0.08));border:1px solid #27272a;border-radius:12px;padding:20px;margin-bottom:28px">
       <div style="font-size:12px;color:#22d3ee;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:8px">Headline</div>
-      <div style="font-size:18px;color:#fafafa;font-weight:600;line-height:1.4">${escape(exec.headline)}</div>
+      <div style="font-size:18px;color:#fafafa;font-weight:600;line-height:1.4;margin-bottom:12px">${escape(exec.headline)}</div>
+      <div style="font-size:14px;color:#a1a1aa;font-style:italic;line-height:1.5">${escape(exec.narrativeArc)}</div>
     </div>
 
     <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Key findings</h2>
@@ -60,15 +61,23 @@ export function renderReportEmailHtml(report: AuditReport): string {
       ${exec.keyFindings.map((f) => `<li style="margin-bottom:6px">${escape(f)}</li>`).join('')}
     </ul>
 
-    <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Competitive gaps</h2>
-    <ul style="margin:0;padding-left:20px;color:#d4d4d8;font-size:14px;line-height:1.6">
-      ${exec.competitiveGaps.map((g) => `<li style="margin-bottom:6px">${escape(g)}</li>`).join('')}
-    </ul>
+    <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Quick wins (under 30 days)</h2>
+    <div style="color:#d4d4d8;font-size:14px;line-height:1.5">
+      ${exec.quickWins
+        .map(
+          (r) => `<div style="margin-bottom:14px;padding:12px;background:rgba(16,185,129,0.06);border-left:3px solid #10b981;border-radius:4px"><div style="color:#fafafa;font-weight:600;margin-bottom:4px">${escape(r.action)}</div><div style="color:#a1a1aa;font-size:13px">${escape(r.rationale)}</div></div>`
+        )
+        .join('')}
+    </div>
 
-    <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Recommendations</h2>
-    <ul style="margin:0;padding-left:20px;color:#d4d4d8;font-size:14px;line-height:1.6">
-      ${exec.recommendations.map((r) => `<li style="margin-bottom:6px">${escape(r)}</li>`).join('')}
-    </ul>
+    <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Strategic plays (1-3 quarters)</h2>
+    <div style="color:#d4d4d8;font-size:14px;line-height:1.5">
+      ${exec.strategicPlays
+        .map(
+          (r) => `<div style="margin-bottom:14px;padding:12px;background:rgba(99,102,241,0.06);border-left:3px solid #6366f1;border-radius:4px"><div style="color:#fafafa;font-weight:600;margin-bottom:4px">${escape(r.action)}</div><div style="color:#a1a1aa;font-size:13px">${escape(r.rationale)}</div></div>`
+        )
+        .join('')}
+    </div>
 
     <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Top competitors (by SERP frequency)</h2>
     <table style="width:100%;border-collapse:collapse;font-size:14px">
@@ -78,7 +87,7 @@ export function renderReportEmailHtml(report: AuditReport): string {
 
     <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">AI engine mentions</h2>
     ${aiList}
-
+${renderCitationsHtml(report)}
     <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Keywords audited</h2>
     <div style="color:#a1a1aa;font-size:13px;line-height:1.8">${report.keywords.map((k) => `<span style="display:inline-block;background:#1a1a1a;padding:3px 10px;border-radius:14px;margin:3px;color:#d4d4d8">${escape(k)}</span>`).join('')}</div>
 
@@ -99,14 +108,17 @@ export function renderReportEmailText(report: AuditReport): string {
     `HEADLINE`,
     exec.headline,
     ``,
+    `THE STORY`,
+    exec.narrativeArc,
+    ``,
     `KEY FINDINGS`,
     ...exec.keyFindings.map((f) => `  - ${f}`),
     ``,
-    `COMPETITIVE GAPS`,
-    ...exec.competitiveGaps.map((g) => `  - ${g}`),
+    `QUICK WINS (under 30 days)`,
+    ...exec.quickWins.flatMap((r) => [`  > ${r.action}`, `    why: ${r.rationale}`]),
     ``,
-    `RECOMMENDATIONS`,
-    ...exec.recommendations.map((r) => `  - ${r}`),
+    `STRATEGIC PLAYS (1-3 quarters)`,
+    ...exec.strategicPlays.flatMap((r) => [`  > ${r.action}`, `    why: ${r.rationale}`]),
     ``,
     `TOP COMPETITORS`,
     ...report.competitors.map(
@@ -130,4 +142,78 @@ export function renderReportEmailText(report: AuditReport): string {
 function avgRank(rankings: { rank: number }[]): string {
   if (!rankings.length) return '-';
   return (rankings.reduce((s, r) => s + r.rank, 0) / rankings.length).toFixed(1);
+}
+
+function renderCitationsHtml(report: AuditReport): string {
+  const cit = report.citations;
+  if (!cit || cit.sources.length === 0) return '';
+  const successSources = cit.sources.filter((s) => s.status !== 'failed');
+  const self = cit.profiles.find((p) => p.isSelf);
+  const top = cit.profiles.filter((p) => p.citationCount > 0).slice(0, 8);
+
+  const profileRows = top
+    .map((p) => {
+      const youTag = p.isSelf
+        ? '<span style="display:inline-block;background:rgba(6,182,212,0.18);color:#22d3ee;border:1px solid rgba(6,182,212,0.4);padding:1px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-right:6px">You</span>'
+        : '';
+      const avg = p.averagePosition !== null ? `#${p.averagePosition.toFixed(1)}` : '—';
+      const tops = p.topPickCount > 0
+        ? `<span style="color:#34d399;font-weight:600">${p.topPickCount}</span>`
+        : '<span style="color:#52525b">—</span>';
+      return `<tr>
+        <td style="padding:8px;border-bottom:1px solid #2a2a2a;color:#e4e4e7">${youTag}<strong>${escape(p.brand)}</strong>${p.domain ? ` <span style="color:#71717a;font-size:12px">(${escape(p.domain)})</span>` : ''}</td>
+        <td style="padding:8px;border-bottom:1px solid #2a2a2a;color:#a1a1aa;text-align:right;font-family:monospace">${p.citationCount}</td>
+        <td style="padding:8px;border-bottom:1px solid #2a2a2a;text-align:right;font-family:monospace">${tops}</td>
+        <td style="padding:8px;border-bottom:1px solid #2a2a2a;color:#a1a1aa;text-align:right;font-family:monospace">${avg}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const sourceList = cit.sources
+    .filter((s) => s.status !== 'failed' && s.citations.length > 0)
+    .slice(0, 10)
+    .map((s) => {
+      const tags = s.citations
+        .slice(0, 8)
+        .map(
+          (c) =>
+            `<span style="display:inline-block;background:#1a1a1a;color:#d4d4d8;padding:3px 8px;border-radius:4px;margin:2px 4px 2px 0;font-size:12px">${
+              c.position !== null ? `#${c.position} ` : ''
+            }${escape(c.brand)}</span>`
+        )
+        .join('');
+      return `<div style="margin-bottom:14px;padding:12px;background:#0f0f10;border:1px solid #27272a;border-radius:6px">
+        <div style="font-size:11px;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">${escape(s.type)} · ${escape(s.domain)}</div>
+        <a href="${escape(s.url)}" style="color:#22d3ee;text-decoration:none;font-size:14px;font-weight:600">${escape(s.title)}</a>
+        <div style="margin-top:8px">${tags || '<span style="color:#52525b;font-size:12px;font-style:italic">no brand citations extracted</span>'}</div>
+      </div>`;
+    })
+    .join('');
+
+  const selfLine = self
+    ? `Cited in <strong>${self.citationCount}</strong> of ${successSources.length} sources` +
+      (self.topPickCount > 0 ? ` · ${self.topPickCount} top-pick mention${self.topPickCount === 1 ? '' : 's'}` : '') +
+      (self.averagePosition !== null ? ` · avg position #${self.averagePosition.toFixed(1)}` : '')
+    : `Cited in 0 of ${successSources.length} third-party sources`;
+
+  return `
+    <h2 style="font-size:18px;color:#fafafa;font-weight:600;margin:28px 0 12px">Third-party visibility</h2>
+    <div style="background:linear-gradient(135deg,rgba(6,182,212,0.06),rgba(139,92,246,0.06));border:1px solid #27272a;border-radius:8px;padding:14px;margin-bottom:14px;color:#d4d4d8;font-size:14px">
+      ${selfLine}
+    </div>
+    ${
+      profileRows
+        ? `<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px">
+      <thead><tr>
+        <th style="text-align:left;padding:8px;color:#71717a;font-weight:500;border-bottom:1px solid #2a2a2a">Brand</th>
+        <th style="text-align:right;padding:8px;color:#71717a;font-weight:500;border-bottom:1px solid #2a2a2a">Cited in</th>
+        <th style="text-align:right;padding:8px;color:#71717a;font-weight:500;border-bottom:1px solid #2a2a2a">Top pick</th>
+        <th style="text-align:right;padding:8px;color:#71717a;font-weight:500;border-bottom:1px solid #2a2a2a">Avg pos</th>
+      </tr></thead>
+      <tbody>${profileRows}</tbody>
+    </table>`
+        : ''
+    }
+    ${sourceList ? `<div>${sourceList}</div>` : ''}
+  `;
 }

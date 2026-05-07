@@ -5,8 +5,8 @@
 // =====================================================
 
 import { searchSerp, unlockUrl, htmlToCleanText } from '../../brightdata';
-import { runClaudeJson } from '../../claude-cli';
-import { toCountryCode } from '../../locale';
+import { runClaudeJson } from '../../claude';
+import { toCountryCode, defaultLanguageForCountry } from '../../locale';
 import { BrandProfileLite, DiscoveredBrand } from '../../types';
 import {
   addSubTask,
@@ -29,17 +29,20 @@ export async function runBrandDiscovery(
 ): Promise<DiscoveredBrand> {
   startStage(auditId, STAGE_ID);
 
-  // Step 1: SERP search for the brand (country-localized, results forced to English)
+  // Step 1: SERP search for the brand (country + language localized so the
+  // top result tends to be the brand's local storefront, e.g. eu.eastpak.com/fr-fr
+  // for France instead of us.eastpak.com)
   const country = toCountryCode(location);
+  const language = defaultLanguageForCountry(country);
   const serpSub = addSubTask(auditId, STAGE_ID, `SERP: "${brandName}" in ${location}`, 'SERP');
   let candidateUrl: string;
   try {
     const t0 = Date.now();
-    log(auditId, 'BD_CALL', `SERP: "${brandName} ${location}" (gl=${country})`, {
+    log(auditId, 'BD_CALL', `SERP: "${brandName}" (gl=${country} hl=${language})`, {
       bdProduct: 'SERP',
       stage: STAGE_ID,
     });
-    const results = await searchSerp(`${brandName} ${location}`, { num: 10, country });
+    const results = await searchSerp(brandName, { num: 10, country, language });
     log(auditId, 'BD_DONE', `SERP returned ${results.length} results`, {
       bdProduct: 'SERP',
       stage: STAGE_ID,
@@ -117,7 +120,11 @@ export async function runBrandDiscovery(
 /**
  * Pick the most likely brand-owned URL from SERP results.
  * Heuristic: prefer the highest-ranked result whose domain
- * contains the brand name (slugged). Skip aggregator/social/wiki sites.
+ * contains the brand name (slugged). Skip aggregator/social/wiki sites
+ * UNLESS the user is explicitly auditing one of those brands — e.g.
+ * typing "Reddit" should resolve to reddit.com even though reddit.com
+ * is blocklisted (the blocklist exists to prevent reddit.com/r/Foo
+ * being picked when auditing the Foo product).
  */
 function pickBrandUrl(
   results: { url: string; title: string; snippet: string }[],
@@ -142,6 +149,18 @@ function pickBrandUrl(
     'capterra.com',
   ];
 
+  // First pass — exact brand-domain match wins regardless of blocklist.
+  // bareHostSlug strips common TLDs so "reddit.com" -> "reddit" can be
+  // compared directly against brand slug "reddit".
+  for (const r of results) {
+    try {
+      const host = new URL(r.url).hostname.toLowerCase();
+      if (bareHostSlug(host) === slug) return r.url;
+    } catch {
+      // skip malformed URLs
+    }
+  }
+
   for (const r of results) {
     try {
       const host = new URL(r.url).hostname.toLowerCase();
@@ -162,6 +181,16 @@ function pickBrandUrl(
     }
   }
   return results[0].url;
+}
+
+/**
+ * Strip the leading subdomain (www) and trailing common TLD from a
+ * hostname slug so "reddit.com" / "www.reddit.com" both reduce to
+ * "reddit", matching brand slugs derived from the user's free-text input.
+ */
+function bareHostSlug(host: string): string {
+  const slug = host.replace(/^www\./, '').replace(/[^a-z0-9]/g, '');
+  return slug.replace(/(com|org|net|co|io|ai|app|gg)$/, '');
 }
 
 async function extractBrandProfile(

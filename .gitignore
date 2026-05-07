@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# audit run logs (one folder per audit, written by lib/audit/persistence.ts)
+/audit/
+
+# Claude Code session data
+.claude/
+
+# scratch / dev artifacts
+audit_status.json
+linear_log.txt
+test_runs.py

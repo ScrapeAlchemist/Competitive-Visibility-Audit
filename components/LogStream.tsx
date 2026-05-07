@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import { LogEntry, BdProduct } from '@/lib/types';
+
+const MAX_VISIBLE = 10;
 
 const PRODUCT_COLORS: Record<BdProduct, string> = {
   SERP: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
@@ -31,13 +32,7 @@ interface Props {
 }
 
 export default function LogStream({ logs, className = '' }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs.length]);
+  const visible = logs.slice(-MAX_VISIBLE).reverse();
 
   return (
     <div className={`flex flex-col bg-zinc-950/60 border border-zinc-800 rounded-xl overflow-hidden ${className}`}>
@@ -48,11 +43,11 @@ export default function LogStream({ logs, className = '' }: Props) {
         </div>
         <span className="text-xs text-zinc-600">{logs.length} events</span>
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 font-mono text-xs leading-relaxed space-y-1.5 max-h-[600px]">
-        {logs.length === 0 && (
+      <div className="p-3 font-mono text-xs leading-relaxed space-y-1.5">
+        {visible.length === 0 && (
           <div className="text-zinc-600 italic px-2 py-1">Waiting for first event...</div>
         )}
-        {logs.map((log) => (
+        {visible.map((log) => (
           <div key={log.id} className="flex items-start gap-2 px-2 py-1 hover:bg-zinc-900/40 rounded">
             <span className="text-zinc-600 shrink-0">{formatTime(log.timestamp)}</span>
             {log.bdProduct && (

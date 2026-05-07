@@ -42,6 +42,17 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
           setLogs((prev) => [...prev, entry]);
         } else if (data.kind === 'audit') {
           setAudit({ ...data.audit });
+          // Close cleanly on terminal status so the connection doesn't linger.
+          if (
+            data.audit.status === 'complete' ||
+            data.audit.status === 'failed' ||
+            data.audit.status === 'partial'
+          ) {
+            if (es) {
+              es.close();
+              es = null;
+            }
+          }
         } else if (data.kind === 'stage') {
           setAudit((prev) => {
             if (!prev) return prev;
@@ -50,9 +61,9 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
           });
         }
       };
-      es.onerror = () => {
-        if (es) es.close();
-      };
+      // Booth WiFi is flaky. Let the browser auto-reconnect on transient errors.
+      // Closing here would freeze the live activity stream silently.
+      es.onerror = () => {};
     };
 
     connect();
@@ -125,7 +136,7 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
         {error && <div className="text-red-400">{error}</div>}
 
         {audit && (
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6">
             {/* Main column */}
             <div className="space-y-6">
               <DiscoveryCard audit={audit} onConfirm={handleConfirm} />
@@ -140,7 +151,7 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
             </div>
 
             {/* Side rail */}
-            <div className="lg:sticky lg:top-8 lg:self-start">
+            <div className="xl:sticky xl:top-8 xl:self-start">
               <LogStream logs={logs} />
             </div>
           </div>

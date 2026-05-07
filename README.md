@@ -30,6 +30,7 @@ Open http://localhost:3000.
 
 ## Required env vars
 
+- `ANTHROPIC_API_KEY` - your Anthropic API key (from console.anthropic.com)
 - `BRIGHTDATA_API_TOKEN` - your BD API token
 - `BRIGHTDATA_SERP_ZONE` - SERP zone (default `serp`)
 - `BRIGHTDATA_WEB_UNLOCKER_ZONE` - Web Unlocker zone (default `unlocker`)
@@ -37,17 +38,16 @@ Open http://localhost:3000.
 ## Optional env vars
 
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_SECURE` - for `Email Report`. Without these, the Email Report button is disabled.
-- `CLAUDE_CLI_PATH` - override path to the `claude` binary (defaults to `claude` on PATH)
 
 ## Pre-flight check
 
-Before running a demo, hit `/api/audit/warmup` - it does one tiny call against each Bright Data product and confirms Claude CLI is callable. Returns `{ bd: { serp, unlocker }, claude, email }`.
+Before running a demo, hit `/api/audit/warmup` - it does one tiny call against each Bright Data product and confirms the Anthropic API key works. Returns `{ bd: { serp, unlocker }, claude, email }`.
 
 ## Architecture notes
 
 - **State:** in-memory `Map<auditId, AuditEnvelope>` attached to `globalThis` to survive Next.js dev hot-reload.
 - **Live updates:** Server-Sent Events via `/api/audit/[id]/stream`. Three event kinds: `log`, `stage`, `audit`. The client dedupes log entries by id.
-- **Claude CLI:** spawned with `claude -p --output-format json --tools "" --no-session-persistence --system-prompt <strict-JSON-prompt>` so Claude treats it as pure text-in / text-out, no tool use.
+- **Anthropic API:** direct `@anthropic-ai/sdk` calls via `messages.create()`. Three model tiers: Haiku (classification), Sonnet (extraction), Opus (synthesis). Pure text-in / text-out, no tool use.
 - **AI engines:** Perplexity uses the public search URL via Web Unlocker. Gemini routes through Google's AI Overviews UDM. ChatGPT and Grok require BD's Web Scraper API datasets - not configured here, so they fail cleanly without breaking the parallel visualization.
 - **Graceful degradation:** any sub-task failure marks the stage as `partial` and the pipeline keeps going; the report renders with whatever data made it through.
 

@@ -62,6 +62,15 @@ async function bdRequest<T = unknown>(
         throw new BdError(`BD request failed: ${res.status} ${res.statusText}`, res.status);
       }
 
+      // BD sometimes returns HTTP 200 with the real error in x-brd-* headers
+      // (auth failures, IP blocklist hits, zone misconfig). Surface them.
+      const brdErr = res.headers.get('x-brd-error') || res.headers.get('x-brd-err-msg');
+      const brdStatus = res.headers.get('x-brd-status-code');
+      if (brdErr) {
+        const code = brdStatus ? ` (${brdStatus})` : '';
+        throw new BdError(`BD upstream error${code}: ${brdErr}`, brdStatus ? Number(brdStatus) : undefined);
+      }
+
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         return (await res.json()) as T;
@@ -105,33 +114,42 @@ export interface SerpOpts {
   num?: number;
   /** Two-letter ISO country code, e.g. 'us', 'uk', 'il'. Defaults to 'us'. */
   country?: string;
+  /**
+   * Two-letter ISO language code for `hl` (Google interface + result language).
+   * Defaults to 'en'. Pair with a market-language query for actual local results -
+   * `gl=fr, hl=en` with an English query still returns global English listicles
+   * because the query language picks the corpus.
+   */
+  language?: string;
 }
 
-/**
- * Bright Data SERP API search.
- * Sets gl (country, configurable) and hl=en (locks result language to English
- * since this is a demo audit consumed by English-speaking SEO teams).
- */
-export async function searchSerp(query: string, opts: SerpOpts = {}): Promise<SerpResult[]> {
-  const num = opts.num ?? 20;
-  const country = (opts.country || 'us').toLowerCase();
+// Google now serves ~10 organic results per page and ignores num=20+.
+// To reach a deeper visibility window we fire parallel page requests
+// with `start=` offsets and merge.
+const SERP_PAGE_SIZE = 10;
 
+interface SerpPageOpts {
+  start: number;
+  country: string;
+  language: string;
+}
+
+async function fetchSerpPage(query: string, opts: SerpPageOpts): Promise<Omit<SerpResult, 'rank'>[]> {
   const params = new URLSearchParams({
     q: query,
-    num: String(num),
-    gl: country,
-    hl: 'en',
+    gl: opts.country,
+    hl: opts.language,
   });
+  if (opts.start > 0) params.set('start', String(opts.start));
 
   const url = `https://www.google.com/search?${params.toString()}`;
-
   const data = await bdRequest<SerpRawResponse>(SERP_ZONE, url, {
     format: 'raw',
     dataFormat: 'parsed_light',
   });
 
   const items = data.organic || [];
-  return items.slice(0, num).map((item, idx) => {
+  return items.map((item) => {
     const itemUrl = item.link || item.url || '';
     let domain = '';
     try {
@@ -144,9 +162,41 @@ export async function searchSerp(query: string, opts: SerpOpts = {}): Promise<Se
       domain,
       title: item.title || '',
       snippet: item.description || item.snippet || '',
-      rank: idx + 1,
     };
   });
+}
+
+/**
+ * Bright Data SERP API search. Sets gl (country) + hl (language) on the
+ * Google query URL. Caller controls both - language is NOT forced to English.
+ *
+ * Pagination: Google now caps page size at ~10 organic results regardless
+ * of `num=`, so we fire ceil(num/10) parallel page requests with `start=`
+ * offsets and stitch them back together. Ranks reflect Google's absolute
+ * position (page 2 entries start at rank 11), so a gap on page 1 (e.g. 8
+ * organic + 2 ad/knowledge slots) leaves real gaps in the rank sequence,
+ * which is what we want for visibility scoring.
+ */
+export async function searchSerp(query: string, opts: SerpOpts = {}): Promise<SerpResult[]> {
+  const num = opts.num ?? 20;
+  const country = (opts.country || 'us').toLowerCase();
+  const language = (opts.language || 'en').toLowerCase();
+  const pagesNeeded = Math.max(1, Math.ceil(num / SERP_PAGE_SIZE));
+
+  const pages = await Promise.all(
+    Array.from({ length: pagesNeeded }, (_, i) =>
+      fetchSerpPage(query, { start: i * SERP_PAGE_SIZE, country, language })
+    )
+  );
+
+  const merged: SerpResult[] = [];
+  pages.forEach((items, pageIdx) => {
+    items.forEach((item, itemIdx) => {
+      merged.push({ ...item, rank: pageIdx * SERP_PAGE_SIZE + itemIdx + 1 });
+    });
+  });
+
+  return merged.slice(0, num);
 }
 
 // =====================================================
@@ -181,6 +231,89 @@ export function htmlToCleanText(html: string, maxLen = 8000): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLen);
+}
+
+export interface InternalLink {
+  url: string;
+  text: string;
+}
+
+/**
+ * Pull <a href> targets out of homepage HTML, resolve to absolute URLs,
+ * keep only same-origin links, dedupe by URL, and return with anchor text.
+ * Used by Stage 5 (deep-scrape) so we let Claude pick real URLs the homepage
+ * actually links to instead of guessing paths like /about that may 404.
+ */
+export function extractInternalLinks(html: string, baseUrl: string, max = 80): InternalLink[] {
+  let baseOrigin: string;
+  let baseHost: string;
+  try {
+    const u = new URL(baseUrl);
+    baseOrigin = u.origin;
+    baseHost = u.hostname.replace(/^www\./, '');
+  } catch {
+    return [];
+  }
+
+  // Strip script/style/noscript first so we don't grab links from inline JS strings.
+  const cleaned = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+  const linkRe = /<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const seen = new Set<string>();
+  const out: InternalLink[] = [];
+
+  for (const match of cleaned.matchAll(linkRe)) {
+    if (out.length >= max) break;
+    const rawHref = match[1].trim();
+    if (
+      !rawHref ||
+      rawHref.startsWith('#') ||
+      rawHref.startsWith('mailto:') ||
+      rawHref.startsWith('tel:') ||
+      rawHref.startsWith('javascript:') ||
+      rawHref.startsWith('data:')
+    ) {
+      continue;
+    }
+
+    let abs: string;
+    try {
+      abs = new URL(rawHref, baseOrigin).toString();
+    } catch {
+      continue;
+    }
+
+    let host: string;
+    try {
+      host = new URL(abs).hostname.replace(/^www\./, '');
+    } catch {
+      continue;
+    }
+    // same registrable host (or subdomain of it)
+    if (host !== baseHost && !host.endsWith(`.${baseHost}`)) continue;
+
+    // strip fragment, normalize trailing slash
+    const noFrag = abs.split('#')[0].replace(/\/$/, '');
+    if (seen.has(noFrag)) continue;
+    seen.add(noFrag);
+
+    // skip obvious non-content extensions
+    if (/\.(pdf|jpg|jpeg|png|gif|webp|svg|ico|css|js|zip|mp4|mp3|woff2?)(\?|$)/i.test(noFrag)) continue;
+
+    const text = match[2]
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+
+    out.push({ url: noFrag, text });
+  }
+  return out;
 }
 
 // =====================================================

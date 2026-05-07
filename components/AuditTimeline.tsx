@@ -30,7 +30,7 @@ const STAGE_DOT: Record<StageStatus, string> = {
   pending: 'bg-zinc-700',
   running: 'bg-yellow-400 animate-pulse',
   complete: 'bg-emerald-500',
-  partial: 'bg-amber-500',
+  partial: 'bg-orange-500',
   failed: 'bg-red-500',
 };
 

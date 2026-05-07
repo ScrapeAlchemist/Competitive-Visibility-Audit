@@ -1,31 +1,36 @@
 // =====================================================
-// Claude CLI subprocess wrapper
+// Anthropic API wrapper
 //
-// Spawns `claude -p "<prompt>" --output-format json`, captures stdout,
-// parses the structured response. One-shot, no interactive session.
+// Direct API calls via @anthropic-ai/sdk. Pure text-in/text-out —
+// no tool use, no streaming, no session state.
 // =====================================================
 
-import { spawn } from 'child_process';
+import Anthropic from '@anthropic-ai/sdk';
 
-const CLI_PATH = process.env.CLAUDE_CLI_PATH || 'claude';
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_RETRIES = 1;
 
-export class ClaudeCliError extends Error {
-  constructor(message: string, public exitCode?: number, public stderr?: string) {
-    super(message);
-    this.name = 'ClaudeCliError';
-  }
+// Model IDs for the Anthropic Messages API.
+// Routing rule:
+//   classification        -> Haiku  (filter listicles, pick best URL per category)
+//   basic processing      -> Sonnet (extract profile, parse AI mentions, summarize page)
+//   report generation     -> Opus   (keyword generation, executive synthesis)
+export const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
+export const MODEL_SONNET = 'claude-sonnet-4-5-20250514';
+export const MODEL_OPUS = 'claude-opus-4-20250115';
+const DEFAULT_MODEL = MODEL_SONNET;
+
+let _client: Anthropic | null = null;
+function getClient(): Anthropic {
+  if (!_client) _client = new Anthropic();
+  return _client;
 }
 
-interface ClaudeCliJsonOutput {
-  type?: string;
-  subtype?: string;
-  result?: string;
-  is_error?: boolean;
-  duration_ms?: number;
-  // Other fields we don't need
-  [key: string]: unknown;
+export class ClaudeApiError extends Error {
+  constructor(message: string, public statusCode?: number) {
+    super(message);
+    this.name = 'ClaudeApiError';
+  }
 }
 
 interface RunOptions {
@@ -37,71 +42,54 @@ interface RunOptions {
 
 async function runOnce(prompt: string, opts: RunOptions = {}): Promise<string> {
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
-  // --tools "" disables all built-in tools so Claude treats this as pure text-in-text-out.
-  // --no-session-persistence avoids writing session state to disk for these one-shot calls.
-  const args = ['-p', '--output-format', 'json', '--tools', '', '--no-session-persistence'];
-  if (opts.model) args.push('--model', opts.model);
-  if (opts.systemPrompt) args.push('--system-prompt', opts.systemPrompt);
-  if (opts.appendSystemPrompt) args.push('--append-system-prompt', opts.appendSystemPrompt);
 
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(CLI_PATH, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
-      windowsHide: true,
-    });
+  let system: string | undefined;
+  if (opts.systemPrompt && opts.appendSystemPrompt) {
+    system = opts.systemPrompt + '\n\n' + opts.appendSystemPrompt;
+  } else {
+    system = opts.systemPrompt || opts.appendSystemPrompt;
+  }
 
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, timeoutMs);
+  try {
+    const response = await getClient().messages.create(
+      {
+        model: opts.model || DEFAULT_MODEL,
+        max_tokens: 4096,
+        ...(system ? { system } : {}),
+        messages: [{ role: 'user', content: prompt }],
+      },
+      { signal: controller.signal },
+    );
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(new ClaudeCliError(`spawn error: ${err.message}`));
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(new ClaudeCliError(`Claude CLI timed out after ${timeoutMs}ms`));
-      }
-      if (code !== 0) {
-        return reject(new ClaudeCliError(`Claude CLI exited with code ${code}`, code ?? undefined, stderr));
-      }
-      try {
-        const parsed = JSON.parse(stdout) as ClaudeCliJsonOutput;
-        if (parsed.is_error) {
-          return reject(new ClaudeCliError(`Claude CLI returned error: ${parsed.result || 'unknown'}`));
-        }
-        resolve(parsed.result || '');
-      } catch {
-        // If JSON parse fails, return raw stdout (sometimes single-line text)
-        if (stdout.trim()) return resolve(stdout.trim());
-        reject(new ClaudeCliError('Failed to parse Claude CLI output', undefined, stderr));
-      }
-    });
-
-    // Send prompt via stdin so we don't worry about shell escaping
-    child.stdin.write(prompt);
-    child.stdin.end();
-  });
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('');
+    if (!text) throw new ClaudeApiError('No text content in Claude response');
+    return text;
+  } catch (err) {
+    if (err instanceof ClaudeApiError) throw err;
+    if (
+      (err instanceof Error && err.name === 'AbortError') ||
+      (err instanceof Anthropic.APIConnectionError && controller.signal.aborted)
+    ) {
+      throw new ClaudeApiError(`Claude API timed out after ${timeoutMs}ms`);
+    }
+    if (err instanceof Anthropic.APIError) {
+      throw new ClaudeApiError(`Claude API error (${err.status}): ${err.message}`, err.status);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
- * Run a prompt against the Claude CLI and return the response text.
- * Includes one retry on non-zero exit.
+ * Run a prompt against the Anthropic Messages API and return the response text.
+ * Includes one retry on transient failures.
  */
 export async function runClaude(prompt: string, opts: RunOptions = {}): Promise<string> {
   let lastErr: unknown;
@@ -115,7 +103,7 @@ export async function runClaude(prompt: string, opts: RunOptions = {}): Promise<
       }
     }
   }
-  throw lastErr instanceof Error ? lastErr : new ClaudeCliError(String(lastErr));
+  throw lastErr instanceof Error ? lastErr : new ClaudeApiError(String(lastErr));
 }
 
 const JSON_SYSTEM_PROMPT =
@@ -123,8 +111,7 @@ const JSON_SYSTEM_PROMPT =
 
 /**
  * Convenience: run a prompt and parse the response as JSON.
- * Replaces the default Claude Code system prompt with a strict JSON-only one
- * so Claude does not try to use tools or add prose.
+ * Uses a strict JSON-only system prompt so Claude does not add prose.
  */
 export async function runClaudeJson<T = unknown>(prompt: string, opts: RunOptions = {}): Promise<T> {
   const raw = await runClaude(prompt, {
@@ -143,14 +130,12 @@ export async function runClaudeJson<T = unknown>(prompt: string, opts: RunOption
 export function parseJsonResponse<T = unknown>(text: string): T {
   const cleaned = text.trim();
 
-  // Try direct parse
   try {
     return JSON.parse(cleaned) as T;
   } catch {
     // continue
   }
 
-  // Strip markdown fences and try again
   let stripped = cleaned;
   if (stripped.startsWith('```')) {
     stripped = stripped.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -161,7 +146,6 @@ export function parseJsonResponse<T = unknown>(text: string): T {
     }
   }
 
-  // Bracket-counting scan for the first balanced { ... } or [ ... ]
   const balanced = extractFirstBalancedJson(stripped);
   if (balanced) {
     try {
@@ -171,7 +155,7 @@ export function parseJsonResponse<T = unknown>(text: string): T {
     }
   }
 
-  throw new ClaudeCliError(`Could not parse Claude response as JSON. Preview: ${text.slice(0, 200)}`);
+  throw new ClaudeApiError(`Could not parse Claude response as JSON. Preview: ${text.slice(0, 200)}`);
 }
 
 function extractFirstBalancedJson(text: string): string | null {
@@ -210,11 +194,12 @@ function extractFirstBalancedJson(text: string): string | null {
 }
 
 /**
- * Warmup ping. Returns true if Claude CLI is callable.
+ * Warmup ping. Returns true if the Anthropic API key is valid and the API is reachable.
  */
 export async function warmup(): Promise<boolean> {
+  if (!process.env.ANTHROPIC_API_KEY) return false;
   try {
-    await runOnce('Reply with the single word: ok', { timeoutMs: 30_000 });
+    await runOnce('Reply with the single word: ok', { timeoutMs: 15_000 });
     return true;
   } catch {
     return false;
