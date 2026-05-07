@@ -1,63 +1,103 @@
 # Competitive Visibility Audit
 
-Brighton SEO 2026 demo for Bright Data. Enter a **brand name + location**; the app discovers the real website, grounds keyword generation in what the company actually does today, and produces a parallelized competitive audit with a live timeline of every Bright Data call.
+A real-time competitive intelligence tool built with [Next.js](https://nextjs.org), [Bright Data](https://brightdata.com) APIs, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. Enter a brand name and location; it discovers the real website, generates grounded keywords, runs parallel SERP + scraping + AI engine queries, and produces an executive audit report with live progress visualization.
+
+> Built for **Brighton SEO 2026** as a Bright Data demo. The [original notebook version](https://github.com/ScrapeAlchemist/Competitive-Visibility-Audit/tree/notebook) used OpenAI + Colab; this is a full rewrite as an interactive web app.
 
 ## How it works
 
-```
-Stage 0: Brand discovery       SERP -> Web Unlocker -> Claude extract
-                               (PAUSE for user to confirm URL)
-Stage 1: Keyword generation    Claude (8 buyer-intent queries grounded in homepage)
-Stage 2: SERP rankings         8 parallel BD SERP calls -> aggregate top 5 competitors
-Stage 3: Homepage extraction   6 parallel BD Unlocker -> 6 parallel Claude profiles
-Stage 4: AI engine mentions    4 parallel queries (Perplexity + Gemini live; ChatGPT/Grok stubbed)
-Stage 5: Deep page scrape      ~18 parallel BD Unlocker on /pricing /about /features
-Stage 6: Executive synthesis   Claude over the full aggregated context
-```
+| Stage | What happens | Bright Data product |
+|-------|-------------|-------------------|
+| **0. Brand discovery** | SERP search + Web Unlocker scrape + Claude extract. Pauses for user to confirm the discovered URL. | SERP API, Web Unlocker |
+| **1. Keyword generation** | Claude generates 8 buyer-intent keywords grounded in the actual homepage content. | — |
+| **2. SERP rankings** | 8 parallel SERP calls, aggregates domain frequency, picks top 5 competitors. | SERP API |
+| **3. Homepage extraction** | 6 parallel Web Unlocker scrapes + 6 parallel Claude extractions for brand profiles. | Web Unlocker |
+| **4. AI engine mentions** | Queries ChatGPT, Perplexity, Grok, and Gemini via AI Search datasets (3 redundant snapshots each, first-ready wins). | Web Scraper API |
+| **5. Deep page scrape** | ~18 parallel Web Unlocker calls on competitor /pricing, /about, /features pages. | Web Unlocker |
+| **6. Executive synthesis** | Claude synthesizes all data into findings, gaps, and recommendations. | — |
 
-End-to-end: ~90-180s live (varies with target site weight and Claude latency).
+End-to-end: ~2-3 minutes (varies with target site and API latency).
 
-## Setup
+## Quick start
 
 ```bash
+git clone https://github.com/ScrapeAlchemist/Competitive-Visibility-Audit.git
+cd Competitive-Visibility-Audit
 npm install
 cp .env.example .env.local
-# Fill in BRIGHTDATA_API_TOKEN + zone names + (later) SMTP_*
+# Fill in your API keys (see below)
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open [http://localhost:3000](http://localhost:3000).
 
-## Required env vars
+## Prerequisites
 
-- `BRIGHTDATA_API_TOKEN` - your BD API token
-- `BRIGHTDATA_SERP_ZONE` - SERP zone (default `serp`)
-- `BRIGHTDATA_WEB_UNLOCKER_ZONE` - Web Unlocker zone (default `unlocker`)
+- **Node.js** 18+
+- **Bright Data account** with API token and configured zones
+- **Claude Code CLI** installed and on PATH ([install guide](https://docs.anthropic.com/en/docs/claude-code/getting-started))
 
-## Optional env vars
+## Environment variables
 
-- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_SECURE` - for `Email Report`. Without these, the Email Report button is disabled.
-- `CLAUDE_CLI_PATH` - override path to the `claude` binary (defaults to `claude` on PATH)
+Copy `.env.example` to `.env.local` and fill in:
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `BRIGHTDATA_API_TOKEN` | Your Bright Data API token |
+| `BRIGHTDATA_SERP_ZONE` | SERP API zone name (default: `serp`) |
+| `BRIGHTDATA_WEB_UNLOCKER_ZONE` | Web Unlocker zone name (default: `unlocker`) |
+
+### Optional
+
+| Variable | Description |
+|----------|-------------|
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_SECURE` | SMTP config for the "Email Report" button. Without these, email is disabled. |
+| `CLAUDE_CLI_PATH` | Override path to the `claude` binary (default: `claude`) |
 
 ## Pre-flight check
 
-Before running a demo, hit `/api/audit/warmup` - it does one tiny call against each Bright Data product and confirms Claude CLI is callable. Returns `{ bd: { serp, unlocker }, claude, email }`.
+Hit `GET /api/audit/warmup` before a demo. It runs one small call against each Bright Data product and confirms Claude CLI is reachable. Returns:
 
-## Architecture notes
+```json
+{ "bd": { "serp": true, "unlocker": true }, "claude": true, "email": false }
+```
 
-- **State:** in-memory `Map<auditId, AuditEnvelope>` attached to `globalThis` to survive Next.js dev hot-reload.
-- **Live updates:** Server-Sent Events via `/api/audit/[id]/stream`. Three event kinds: `log`, `stage`, `audit`. The client dedupes log entries by id.
-- **Claude CLI:** spawned with `claude -p --output-format json --tools "" --no-session-persistence --system-prompt <strict-JSON-prompt>` so Claude treats it as pure text-in / text-out, no tool use.
-- **AI engines:** Perplexity uses the public search URL via Web Unlocker. Gemini routes through Google's AI Overviews UDM. ChatGPT and Grok require BD's Web Scraper API datasets - not configured here, so they fail cleanly without breaking the parallel visualization.
-- **Graceful degradation:** any sub-task failure marks the stage as `partial` and the pipeline keeps going; the report renders with whatever data made it through.
+## Bright Data APIs used
 
-## Demo tips for Brighton SEO
+| API | Purpose | Docs |
+|-----|---------|------|
+| **SERP API** | Google search results with structured JSON output | [brightdata.com/products/serp-api](https://brightdata.com/products/serp-api) |
+| **Web Unlocker** | Scrape any page through anti-bot protection | [brightdata.com/products/web-unlocker](https://brightdata.com/products/web-unlocker) |
+| **Web Scraper API** | AI Search datasets for ChatGPT, Perplexity, Grok, Gemini | [brightdata.com/products/web-scraper](https://brightdata.com/products/web-scraper) |
 
-- **Stage 0 narrative:** "We didn't ask the LLM what your company does, we read your actual site." Emphasizes how grounded keywords differ from what the LLM might invent from stale training data.
-- **Stage 2 visual:** 8 parallel SERP pills lighting up at once is the cleanest "look at this parallelism" moment.
-- **Stage 4 narrative:** "Here's what 4 different AI assistants think your category looks like" - genuinely BD-unique even with two engines partial.
-- **Stage 5 visual:** ~18 parallel pages. Highest sub-task density, makes the BD scale point visually.
+## Architecture
 
-## Tested verdict
+- **Framework:** Next.js 16 (App Router) with React 19 and Tailwind CSS 4
+- **State:** In-memory `Map<auditId, Audit>` on `globalThis` (survives Next.js dev hot-reload)
+- **Live updates:** Server-Sent Events at `/api/audit/[id]/stream` with three event types: `log`, `stage`, `audit`
+- **Claude integration:** Claude Code CLI spawned as subprocess with `--output-format json --tools "" --no-session-persistence` for pure text-in/JSON-out extraction
+- **AI engine racing:** Each engine fires 3 redundant snapshot triggers via BD datasets API; first-ready snapshot wins and gets downloaded
+- **Graceful degradation:** Any sub-task failure marks its stage as `partial` and the pipeline continues. The report renders with whatever data made it through.
 
-Linear (United States) audit completes in ~3min, finds 5 real competitors (Atlassian, Atono, Shortcut, monday.com, ScraperAPI variants), extracts pricing from competitor `/pricing` pages, and produces specific recommendations like "no visible alternative pages — competitors and review sites dominate buyer research".
+## Project structure
+
+```
+app/
+  page.tsx                    # Landing page (brand + location form)
+  audit/[id]/page.tsx         # Live audit dashboard
+  api/audit/                  # REST + SSE endpoints
+lib/
+  brightdata.ts               # Bright Data SERP, Web Unlocker, AI Search wrappers
+  claude-cli.ts               # Claude Code CLI subprocess wrapper
+  audit/pipeline.ts           # 7-stage orchestrator
+  audit/stages/               # Individual stage implementations
+  audit/state.ts              # In-memory audit state + SSE broadcast
+  types.ts                    # Full TypeScript data model
+components/                   # Timeline, log stream, report preview, discovery card
+```
+
+## License
+
+MIT
