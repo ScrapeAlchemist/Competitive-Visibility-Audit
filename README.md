@@ -2,7 +2,7 @@
 
 A real-time competitive intelligence tool built with [Next.js](https://nextjs.org), [Bright Data](https://brightdata.com) APIs, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. Enter a brand name and location; it discovers the real website, generates grounded keywords, runs parallel SERP + scraping + AI engine queries, and produces an executive audit report with live progress visualization.
 
-> Built for **Brighton SEO 2026** as a Bright Data demo. The [original notebook version](https://github.com/ScrapeAlchemist/Competitive-Visibility-Audit/tree/notebook) used OpenAI + Colab; this is a full rewrite as an interactive web app.
+> Built for **Brighton SEO 2026** as a Bright Data demo.
 
 ## How it works
 
